@@ -135,10 +135,10 @@ TSharedRef<FExtender> FGitSourceControlModule::OnExtendContentBrowserAssetSelect
 
 void FGitSourceControlModule::CreateGitContentBrowserAssetMenu(FMenuBuilder& MenuBuilder, const TArray<FAssetData> SelectedAssets)
 {
-	if (!FGitSourceControlModule::Get().GetProvider().GetStatusBranchNames().Num())
-	{
-		return;
-	}
+	//if (!FGitSourceControlModule::Get().GetProvider().GetStatusBranchNames().Num())
+	//{
+	//	return;
+	//}
 	
 	// Status branches are hardcoded here for simplicity
 	const TArray<FString> BranchNames = { FString("origin/main"), FString("origin/develop") }; // FGitSourceControlModule::Get().GetProvider().GetStatusBranchNames()[0];

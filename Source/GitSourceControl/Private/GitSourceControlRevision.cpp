@@ -44,6 +44,7 @@ bool FGitSourceControlRevision::Get( FString & InOutFilename ) const
 	FString submoduleSHAforBranch;
 	auto fullPathToFile = FString::Printf(TEXT("%s/%s"), *PathToRepositoryRoot, *Filename);
 	bool isFileInSubmodule = GitSourceControlUtils::IsFileInSubmodule(PathToGitBinary, PathToRepositoryRoot, fullPathToFile, OutErrorMessages);
+	bool submoduleSHALookupSucceeded = false;
 
 	// if a filename for the temp file wasn't supplied generate a unique-ish one
 	if(InOutFilename.Len() == 0)
@@ -52,18 +53,21 @@ bool FGitSourceControlRevision::Get( FString & InOutFilename ) const
 		IFileManager::Get().MakeDirectory(*FPaths::DiffDir(), true);
 		// create a unique temp file name based on the unique commit Id
 
-		FString TempFileName;
-
+		FString TempFileName = FString::Printf(TEXT("%stemp-%s-%s"), *FPaths::DiffDir(), *CommitId, *FPaths::GetCleanFilename(Filename));
+		
 		if (isFileInSubmodule)
 		{
 			// Combine the git SHA of the parent commit and the submodule commit to generate a unique filename
 		    // NB if path lengths are an issue here we may need to fall back to shortened hashes
 			submoduleSHAforBranch = GitSourceControlUtils::GetSHAForSubmoduleOnParentBranch(PathToGitBinary, fullPathToFile, CommitId, OutErrorMessages);
-			TempFileName = FString::Printf(TEXT("%stemp-%s-%s-%s"), *FPaths::DiffDir(), *CommitId, *submoduleSHAforBranch, *FPaths::GetCleanFilename(Filename));
-		}
-		else
-		{
-			TempFileName = FString::Printf(TEXT("%stemp-%s-%s"), *FPaths::DiffDir(), *CommitId, *FPaths::GetCleanFilename(Filename));
+			
+			// NB if we are comparing the file to the current branch we're on, we get a CommitId for the submodule file, so the above lookup fails, we
+			// just use the original ...
+			if (submoduleSHAforBranch.Len() > 0)
+			{
+				submoduleSHALookupSucceeded = true;
+				TempFileName = FString::Printf(TEXT("%stemp-%s-%s-%s"), *FPaths::DiffDir(), *CommitId, *submoduleSHAforBranch, *FPaths::GetCleanFilename(Filename));
+			}
 		}
 
 		InOutFilename = FPaths::ConvertRelativePathToFull(TempFileName);
@@ -77,7 +81,7 @@ bool FGitSourceControlRevision::Get( FString & InOutFilename ) const
 	else
 	{
 		// If the file is in a submodule, we want to pass the repository root for the submodule to get the correct revision for the branch
-		if (isFileInSubmodule)
+		if (isFileInSubmodule && submoduleSHALookupSucceeded)
 		{ 
 			auto subModuleRepositoryRootPath = GitSourceControlUtils::GetRepositoryRootTopLevelPath(PathToGitBinary, fullPathToFile, OutErrorMessages);
 			auto relativeFilepathFromSubmoduleRoot = fullPathToFile.RightChop(subModuleRepositoryRootPath.Len() + 2);
