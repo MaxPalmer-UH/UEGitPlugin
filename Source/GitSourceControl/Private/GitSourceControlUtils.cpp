@@ -4,6 +4,7 @@
 // or copy at http://opensource.org/licenses/MIT)
 
 #include "GitSourceControlUtils.h"
+#include "GitSourceControlState.h"
 
 #include "GitMessageLog.h"
 #include "GitSourceControlCommand.h"
@@ -35,7 +36,6 @@
 #include "Misc/MessageDialog.h"
 
 #include "Async/Async.h"
-#include "UObject/Linker.h"
 
 #ifndef GIT_DEBUG_STATUS
 #define GIT_DEBUG_STATUS 0
@@ -257,7 +257,8 @@ bool RunCommandInternalRaw(const FString& InCommand, const FString& InPathToGitB
 		OutErrors.Empty();
 	}
 
-	return ReturnCode == ExpectedReturnCode;
+	auto result = ReturnCode == ExpectedReturnCode;
+	return result;
 }
 
 // Basic parsing or results & errors from the Git command line process
@@ -1825,7 +1826,19 @@ Date:   2014-2015-05-12 11:28:14 +0200
 A	Content/Blueprints/Blueprint_CeilingLight.uasset
 C099	Content/Textures/T_Concrete_Poured_N.uasset Content/Textures/T_Concrete_Poured_N2.uasset
 */
+
 static void ParseLogResults(const TArray<FString>& InResults, TGitSourceControlHistory& OutHistory)
+{
+	FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
+	if (!GitSourceControl)
+	{
+		return;
+	}
+
+	ParseLogResults(InResults, GitSourceControl->GetProvider().GetPathToRepositoryRoot(), OutHistory);
+}
+
+static void ParseLogResults(const TArray<FString>& InResults, const FString& InRepositoryRoot, TGitSourceControlHistory& OutHistory)
 {
 	TSharedRef<FGitSourceControlRevision, ESPMode::ThreadSafe> SourceControlRevision = MakeShareable(new FGitSourceControlRevision);
 	for (const auto& Result : InResults)
@@ -1844,6 +1857,10 @@ static void ParseLogResults(const TArray<FString>& InResults, TGitSourceControlH
 																							// bit integer)
 			SourceControlRevision->CommitIdNumber = FParse::HexNumber(*SourceControlRevision->ShortCommitId);
 			SourceControlRevision->RevisionNumber = -1; // RevisionNumber will be set at the end, based off the index in the History
+			if (InRepositoryRoot.Len() > 0)
+			{
+				SourceControlRevision->PathToRepoRoot = InRepositoryRoot;
+			}
 		}
 		else if (Result.StartsWith(TEXT("Author: "))) // Author name & email
 		{
@@ -2317,29 +2334,165 @@ bool PullOrigin(const FString& InPathToGitBinary, const FString& InPathToReposit
 	return bSuccess;
 }
 
+bool IsPointingToFile(const FString path)
+{
+	if (IFileManager::Get().DirectoryExists(*path))
+	{
+		return false;
+	}
+
+	if (IFileManager::Get().FileExists(*path))
+	{
+		return true;
+	}
+
+	return false; // ???
+}
+
+bool IsFileInSubmodule(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const FString& InRelativeFileName, TArray<FString>& OutErrorMessages)
+{
+	TArray< FString > Results;
+	TArray< FString > Parameters;
+	Parameters.Add(TEXT("--show-superproject-working-tree"));
+
+	auto AbsoluteFileName = FPaths::ConvertRelativePathToFull(InRelativeFileName);
+
+	auto fileRepositoryRoot = FPaths::GetPath(AbsoluteFileName);
+
+	TArray< FString > Files;
+	if (RunCommand(TEXT("rev-parse"), InPathToGitBinary, fileRepositoryRoot, Parameters, Files, Results, OutErrorMessages) == true)
+	{
+		return true;
+	}
+
+	return false;
+}
+
+FString GetParentRepositoryRootTopLevelPath(const FString& InPathToGitBinary, const FString& InPathToAFileAtOrBelowRoot, TArray<FString>& OutErrorMessages)
+{
+	FString repoPath;
+	FString previousRepoPath;
+	FString inPath = InPathToAFileAtOrBelowRoot;
+
+	do
+	{
+		repoPath = GetRepositoryRootTopLevelPath(InPathToGitBinary, inPath, OutErrorMessages);
+
+		if (!repoPath.IsEmpty())
+		{
+			// Move up a folder
+			inPath = (TEXT("../%s"), *repoPath);
+			previousRepoPath = repoPath;
+		}
+
+	} while (!repoPath.IsEmpty());
+
+	return previousRepoPath;
+}
+
+FString GetRepositoryRootTopLevelPath(const FString& InPathToGitBinary, const FString& InPathToAFileAtOrBelowRoot, TArray<FString>& OutErrorMessages)
+{
+	FString result;
+	TArray< FString > Results;
+	TArray< FString > Parameters;
+
+	Parameters.Add("--show-toplevel");
+
+	auto pathToContainingFolder = FPaths::GetPath(InPathToAFileAtOrBelowRoot);
+
+	TArray< FString > Files;
+	if (RunCommand(TEXT("rev-parse"), InPathToGitBinary, pathToContainingFolder, Parameters, Files, Results, OutErrorMessages) == true)
+	{
+		result = Results[0];
+	}
+
+	return result;
+}
+
+const TArray<FString> ListSubmodulePaths(const FString& InPathToGitBinary, const FString& InRepositoryRoot, TArray<FString>& OutErrorMessages)
+{
+	TArray<FString> result;
+	TArray< FString > Results;
+	TArray< FString > Parameters;
+	
+	Parameters.Add("--file .gitmodules");
+	Parameters.Add("--get-regexp path | awk '{ print $2 }");
+
+	TArray< FString > Files;
+	if (RunCommand(TEXT("config"), InPathToGitBinary, InRepositoryRoot, Parameters, Files, Results, OutErrorMessages) == true)
+	{
+		Results.Add(TEXT("Got something"));
+	}
+
+	return result;
+}
+
+const FString GetSHAForSubmoduleOnParentBranch(const FString& InPathToGitBinary, const FString& InRelativeFilenameForFileInSubmodule, const FString& InParentBranchName, TArray<FString>& OutErrorMessages)
+{
+	FString result = TEXT("");
+	TArray< FString > Results;
+	TArray< FString > Parameters;
+
+	auto AbsoluteFileName = FPaths::ConvertRelativePathToFull(InRelativeFilenameForFileInSubmodule);
+	auto parentRepositoryRootPath = GetParentRepositoryRootTopLevelPath(InPathToGitBinary, AbsoluteFileName, OutErrorMessages);
+	auto subModuleRepositoryRootPath = GetRepositoryRootTopLevelPath(InPathToGitBinary, AbsoluteFileName, OutErrorMessages);
+
+	if (parentRepositoryRootPath.Len() > 0 && subModuleRepositoryRootPath.Len() > 0)
+	{
+		auto submoduleRootFolderSubPath = subModuleRepositoryRootPath.RightChop(parentRepositoryRootPath.Len()+1);
+
+	    auto parameter = FString::Printf(TEXT("%s:%s"), *InParentBranchName, *submoduleRootFolderSubPath);
+		Parameters.Add(parameter);
+		TArray< FString > Files;
+		if (RunCommand(TEXT("rev-parse"), InPathToGitBinary, parentRepositoryRootPath, Parameters, Files, Results, OutErrorMessages) == true)
+		{
+			result = Results[0];
+		}
+	}
+	
+	return result;
+}
+
 TSharedPtr<ISourceControlRevision, ESPMode::ThreadSafe> GetOriginRevisionOnBranch( const FString & InPathToGitBinary, const FString & InRepositoryRoot, const FString & InRelativeFileName, TArray<FString> & OutErrorMessages, const FString & BranchName )
 {
 	TGitSourceControlHistory OutHistory;
 
 	TArray< FString > Results;
 	TArray< FString > Parameters;
-	Parameters.Add( BranchName );
-	Parameters.Add( TEXT( "--date=raw" ) );
-	Parameters.Add( TEXT( "--pretty=medium" ) ); // make sure format matches expected in ParseLogResults
+	Parameters.Add(BranchName);
+	Parameters.Add(TEXT("--date=raw"));
+	Parameters.Add(TEXT("--pretty=medium")); // make sure format matches expected in ParseLogResults
 
 	TArray< FString > Files;
-	const auto bResults = RunCommand( TEXT( "show" ), InPathToGitBinary, InRepositoryRoot, Parameters, Files, Results, OutErrorMessages );
+	bool bResults;
+
+	// Determine if the file we are interested in is a submodule
+	FString submoduleSHAforBranch;
+	bool fileInSubmodule = GitSourceControlUtils::IsFileInSubmodule(InPathToGitBinary, InRepositoryRoot, InRelativeFileName, OutErrorMessages);
+
+	// If the file is in a submodule, we want to pass the repository root for the submodule to get the correct revision for the branch
+	if (fileInSubmodule)
+	{
+		// If we are in a submodule, 
+		submoduleSHAforBranch = GitSourceControlUtils::GetSHAForSubmoduleOnParentBranch(InPathToGitBinary, InRelativeFileName, BranchName, OutErrorMessages);
+
+		bResults = RunCommand(TEXT("show"), InPathToGitBinary, InRepositoryRoot, Parameters, Files, Results, OutErrorMessages);
+	}
+	else
+	{
+		bResults = RunCommand(TEXT("show"), InPathToGitBinary, InRepositoryRoot, Parameters, Files, Results, OutErrorMessages);
+	}
 
 	if ( bResults )
 	{
-		ParseLogResults( Results, OutHistory );
+		ParseLogResults( Results, InRepositoryRoot, OutHistory);
 	}
 
 	if ( OutHistory.Num() > 0 )
 	{
 		auto AbsoluteFileName = FPaths::ConvertRelativePathToFull( InRelativeFileName );
 
-		AbsoluteFileName.RemoveFromStart( InRepositoryRoot );
+		AbsoluteFileName.RemoveFromStart(InRepositoryRoot);
 
 		if ( AbsoluteFileName[ 0 ] == '/' )
 		{

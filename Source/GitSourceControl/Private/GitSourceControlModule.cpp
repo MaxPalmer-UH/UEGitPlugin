@@ -23,8 +23,6 @@
 #include "ISourceControlModule.h"
 #include "SourceControlHelpers.h"
 #include "Framework/Commands/UIAction.h"
-#include "Framework/MultiBox/MultiBoxExtender.h"
-#include "Framework/MultiBox/MultiBoxBuilder.h"
 
 #define LOCTEXT_NAMESPACE "GitSourceControl"
 
@@ -142,17 +140,22 @@ void FGitSourceControlModule::CreateGitContentBrowserAssetMenu(FMenuBuilder& Men
 		return;
 	}
 	
-	const FString& BranchName = FGitSourceControlModule::Get().GetProvider().GetStatusBranchNames()[0];
-	MenuBuilder.AddMenuEntry(
-		FText::Format(LOCTEXT("StatusBranchDiff", "Diff against status branch"), FText::FromString(BranchName)),
-		FText::Format(LOCTEXT("StatusBranchDiffDesc", "Compare this asset to the latest status branch version"), FText::FromString(BranchName)),
+	// Hard code our status branches 
+	const TArray<FString> BranchNames = { FString("origin/main"), FString("origin/develop") }; // FGitSourceControlModule::Get().GetProvider().GetStatusBranchNames()[0];
+
+	for (int i = 0; i < BranchNames.Num(); i++)
+	{
+		MenuBuilder.AddMenuEntry(
+			FText::Format(LOCTEXT("StatusBranchDiff", "Diff against status branch {0}"), FText::FromString(BranchNames[i])),
+			FText::Format(LOCTEXT("StatusBranchDiffDesc", "Compare this asset to the latest status branch version {0}"), FText::FromString(BranchNames[i])),
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 1
-		FSlateIcon(FAppStyle::GetAppStyleSetName(), "SourceControl.Actions.Diff"),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "SourceControl.Actions.Diff"),
 #else
-		FSlateIcon(FEditorStyle::GetStyleSetName(), "SourceControl.Actions.Diff"),
+			FSlateIcon(FEditorStyle::GetStyleSetName(), "SourceControl.Actions.Diff"),
 #endif
-		FUIAction(FExecuteAction::CreateRaw( this, &FGitSourceControlModule::DiffAssetAgainstGitOriginBranch, SelectedAssets, BranchName ))
-	);
+			FUIAction(FExecuteAction::CreateRaw(this, &FGitSourceControlModule::DiffAssetAgainstGitOriginBranch, SelectedAssets, BranchNames[i]))
+		);
+	}
 }
 
 void FGitSourceControlModule::DiffAssetAgainstGitOriginBranch(const TArray<FAssetData> SelectedAssets, FString BranchName) const
@@ -177,7 +180,7 @@ void FGitSourceControlModule::DiffAgainstOriginBranch( UObject * InObject, const
 
 	const FGitSourceControlModule& GitSourceControl = FModuleManager::GetModuleChecked<FGitSourceControlModule>("GitSourceControl");
 	const FString& PathToGitBinary = GitSourceControl.AccessSettings().GetBinaryPath();
-	const FString& PathToRepositoryRoot = GitSourceControl.GetProvider().GetPathToRepositoryRoot();
+    FString PathToRepositoryRoot = GitSourceControl.GetProvider().GetPathToRepositoryRoot();
 
 	ISourceControlProvider& SourceControlProvider = ISourceControlModule::Get().GetProvider();
 
@@ -191,16 +194,28 @@ void FGitSourceControlModule::DiffAgainstOriginBranch( UObject * InObject, const
 	{
 		// Get the file name of package
 		FString RelativeFileName;
-		if (FPackageName::DoesPackageExist(InPackagePath, &RelativeFileName))
+		if (FPackageName::DoesPackageExist(InPackagePath, nullptr, &RelativeFileName, true))
 		{
+			TArray<FString> Errors;
+			auto AbsoluteFileName = FPaths::ConvertRelativePathToFull(RelativeFileName);
+
 			// if(SourceControlState->GetHistorySize() > 0)
 			{
-				TArray<FString> Errors;
 				const auto& Revision = GitSourceControlUtils::GetOriginRevisionOnBranch(PathToGitBinary, PathToRepositoryRoot, RelativeFileName, Errors, BranchName);
+
+				if (!Revision.IsValid())
+				{
+					const FText message = FText::FromString(FString::Printf(TEXT("Branch %s does not exist"), *BranchName));
+					const FText description = FText::FromString(TEXT("Invalid Branch Name"));
+
+					FMessageDialog::Open(EAppMsgType::Ok, message, &description);
+					return;
+				}
 
 				check(Revision.IsValid());
 
 				FString TempFileName;
+
 				if (Revision->Get(TempFileName))
 				{
 					// Try and load that package

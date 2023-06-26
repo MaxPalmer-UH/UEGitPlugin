@@ -856,6 +856,8 @@ TArray<FString> FGitSourceControlProvider::GetStatusBranchNames() const
 		}
 	}
 	
+	StatusBranches.Add(TEXT("origin/main"));
+
 	return StatusBranches;
 }
 

@@ -12,7 +12,6 @@
 #include "GitSourceControlProvider.h"
 
 struct FAssetData;
-class FExtender;
 
 /**
 

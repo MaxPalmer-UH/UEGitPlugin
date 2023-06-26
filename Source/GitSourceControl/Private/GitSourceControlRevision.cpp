@@ -22,9 +22,11 @@ bool FGitSourceControlRevision::Get( FString& InOutFilename, EConcurrency::Type 
 		UE_LOG(LogSourceControl, Warning, TEXT("Only EConcurrency::Synchronous is tested/supported for this operation."));
 	}
 #else
-bool FGitSourceControlRevision::Get( FString& InOutFilename ) const
+
+bool FGitSourceControlRevision::Get(FString & InOutFilename) const
 {
 #endif
+	TArray<FString> OutErrorMessages;
 	const FGitSourceControlModule* GitSourceControl = FGitSourceControlModule::GetThreadSafe();
 	if (!GitSourceControl)
 	{
@@ -39,18 +41,33 @@ bool FGitSourceControlRevision::Get( FString& InOutFilename ) const
 		PathToRepositoryRoot = PathToRepoRoot;
 	}
 
+	FString submoduleSHAforBranch;
+	auto fullPathToFile = FString::Printf(TEXT("%s/%s"), *PathToRepositoryRoot, *Filename);
+	bool fileInSubmodule = GitSourceControlUtils::IsFileInSubmodule(PathToGitBinary, PathToRepositoryRoot, fullPathToFile, OutErrorMessages);
+
 	// if a filename for the temp file wasn't supplied generate a unique-ish one
 	if(InOutFilename.Len() == 0)
 	{
 		// create the diff dir if we don't already have it (Git wont)
 		IFileManager::Get().MakeDirectory(*FPaths::DiffDir(), true);
 		// create a unique temp file name based on the unique commit Id
-		const FString TempFileName = FString::Printf(TEXT("%stemp-%s-%s"), *FPaths::DiffDir(), *CommitId, *FPaths::GetCleanFilename(Filename));
+
+		FString TempFileName;
+
+		if (fileInSubmodule)
+		{
+			// Combine the git SHA of the parent commit and the submodule commit to generate a unique filename
+		    // NB slight concern about path lengths here. Perhaps fall back to shortened hashes?
+			submoduleSHAforBranch = GitSourceControlUtils::GetSHAForSubmoduleOnParentBranch(PathToGitBinary, fullPathToFile, CommitId, OutErrorMessages);
+			TempFileName = FString::Printf(TEXT("%stemp-%s-%s-%s"), *FPaths::DiffDir(), *CommitId, *submoduleSHAforBranch, *FPaths::GetCleanFilename(Filename));
+		}
+		else
+		{
+			TempFileName = FString::Printf(TEXT("%stemp-%s-%s"), *FPaths::DiffDir(), *CommitId, *FPaths::GetCleanFilename(Filename));
+		}
+
 		InOutFilename = FPaths::ConvertRelativePathToFull(TempFileName);
 	}
-
-	// Diff against the revision
-	const FString Parameter = FString::Printf(TEXT("%s:%s"), *CommitId, *Filename);
 
 	bool bCommandSuccessful;
 	if(FPaths::FileExists(InOutFilename))
@@ -59,13 +76,33 @@ bool FGitSourceControlRevision::Get( FString& InOutFilename ) const
 	}
 	else
 	{
-		bCommandSuccessful = GitSourceControlUtils::RunDumpToFile(PathToGitBinary, PathToRepositoryRoot, Parameter, InOutFilename);
+		// If the file is in a submodule, we want to pass the repository root for the submodule to get the correct revision for the branch
+		if (fileInSubmodule)
+		{ 
+			auto pathToSubmoduleRoot = GitSourceControlUtils::GetRepositoryRootTopLevelPath(PathToGitBinary, fullPathToFile, OutErrorMessages);
+			auto relativeFilepathFromSubmoduleRoot = fullPathToFile.RightChop(pathToSubmoduleRoot.Len() + 2);
+
+			const FString Parameter = FString::Printf(TEXT("%s:%s"), *submoduleSHAforBranch, *relativeFilepathFromSubmoduleRoot);
+
+			// We need to run the command in the submodule root folder, passing in the submodule commit id and the relative path to the file
+			auto subModuleRepositoryRootPath = GitSourceControlUtils::GetRepositoryRootTopLevelPath(PathToGitBinary, fullPathToFile, OutErrorMessages);
+
+			bCommandSuccessful = GitSourceControlUtils::RunDumpToFile(PathToGitBinary, pathToSubmoduleRoot, Parameter, InOutFilename);
+		}
+		else
+		{
+			// Diff against the revision
+			const FString Parameter = FString::Printf(TEXT("%s:%s"), *CommitId, *Filename);
+
+			bCommandSuccessful = GitSourceControlUtils::RunDumpToFile(PathToGitBinary, PathToRepositoryRoot, Parameter, InOutFilename);
+		}
 	}
 	return bCommandSuccessful;
 }
 
 bool FGitSourceControlRevision::GetAnnotated( TArray<FAnnotationLine>& OutLines ) const
 {
+
 	return false;
 }
 

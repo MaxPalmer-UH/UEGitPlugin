@@ -330,4 +330,18 @@ bool PullOrigin(const FString& InPathToGitBinary, const FString& InPathToReposit
 
 TSharedPtr< class ISourceControlRevision, ESPMode::ThreadSafe > GetOriginRevisionOnBranch( const FString & InPathToGitBinary, const FString & InRepositoryRoot, const FString & InRelativeFileName, TArray< FString > & OutErrorMessages, const FString & BranchName );
 
+bool IsPointingToFile(const FString path);
+
+bool IsFileInSubmodule(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const FString& InRelativeFileName, TArray<FString>& OutErrorMessages);
+
+const FString GetSHAForSubmoduleOnParentBranch(const FString& InPathToGitBinary, const FString& InRelativeFilenameForFileInSubmodule, const FString& ParentBranchName, TArray<FString>& OutErrorMessages);
+
+const TArray<FString> ListSubmodulePaths(const FString& InPathToGitBinary, const FString& InRepositoryRoot, TArray<FString>& OutErrorMessages);
+
+FString GetRepositoryRootTopLevelPath(const FString& InPathToGitBinary, const FString& InPathToAFileAtOrBelowRoot, TArray<FString>& OutErrorMessages);
+
+FString GetParentRepositoryRootTopLevelPath(const FString& InPathToGitBinary, const FString& InPathToAFileAtOrBelowRoot, TArray<FString>& OutErrorMessages);
+
+static void ParseLogResults(const TArray<FString>& InResults, TGitSourceControlHistory& OutHistory);
+static void ParseLogResults(const TArray<FString>& InResults, const FString& InRepositoryRoot, TGitSourceControlHistory& OutHistory);
 }
