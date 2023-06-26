@@ -140,7 +140,7 @@ void FGitSourceControlModule::CreateGitContentBrowserAssetMenu(FMenuBuilder& Men
 		return;
 	}
 	
-	// Hard code our status branches 
+	// Status branches are hardcoded here for simplicity
 	const TArray<FString> BranchNames = { FString("origin/main"), FString("origin/develop") }; // FGitSourceControlModule::Get().GetProvider().GetStatusBranchNames()[0];
 
 	for (int i = 0; i < BranchNames.Num(); i++)
@@ -203,6 +203,7 @@ void FGitSourceControlModule::DiffAgainstOriginBranch( UObject * InObject, const
 			{
 				const auto& Revision = GitSourceControlUtils::GetOriginRevisionOnBranch(PathToGitBinary, PathToRepositoryRoot, RelativeFileName, Errors, BranchName);
 
+				// If we've been pointed at a branch/commit that doesn't exit, tell user and bail
 				if (!Revision.IsValid())
 				{
 					const FText message = FText::FromString(FString::Printf(TEXT("Branch %s does not exist"), *BranchName));
@@ -215,7 +216,6 @@ void FGitSourceControlModule::DiffAgainstOriginBranch( UObject * InObject, const
 				check(Revision.IsValid());
 
 				FString TempFileName;
-
 				if (Revision->Get(TempFileName))
 				{
 					// Try and load that package
